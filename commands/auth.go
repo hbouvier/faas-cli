@@ -16,7 +16,7 @@ import (
 	"runtime"
 	"strings"
 	"time"
-
+    "strconv"
 	"github.com/openfaas/faas-cli/config"
 	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
@@ -178,7 +178,56 @@ func makeRedirectURI(host string, port int) (*url.URL, error) {
 	return res, err
 }
 
+
+
 func authClientCredentials() error {
+	q := url.Values{}
+    q.Set("client_id", clientID)
+    q.Set("client_secret", clientSecret)
+    q.Set("grant_type", grant)
+    if audience != "" {
+	    q.Set("audience", audience)
+    }
+
+    buf := strings.NewReader(q.Encode())
+	req, _ := http.NewRequest(http.MethodPost, authURL, buf)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+    req.Header.Set("Content-Length", strconv.Itoa(len(q.Encode())))
+	res, err := http.DefaultClient.Do(req)
+
+	// fmt.Println("URL:", authURL)
+	// fmt.Println("StatusCode:", res.StatusCode)
+	// fmt.Println("body:", buf)
+
+
+	if err != nil {
+		return errors.Wrap(err, fmt.Sprintf("cannot POST to %s", authURL))
+	}
+	if res.Body != nil {
+		defer res.Body.Close()
+
+		tokenData, _ := ioutil.ReadAll(res.Body)
+
+		if res.StatusCode != http.StatusOK {
+			return fmt.Errorf("cannot authenticate, code: %d.\nResponse: %s", res.StatusCode, string(tokenData))
+		}
+		token := ClientCredentialsToken{}
+		tokenErr := json.Unmarshal(tokenData, &token)
+		if tokenErr != nil {
+			return errors.Wrapf(tokenErr, "unable to unmarshal token: %s", string(tokenData))
+		}
+
+		if err := config.UpdateAuthConfig(gateway, token.AccessToken, config.Oauth2AuthType); err != nil {
+			return err
+		}
+		fmt.Println("credentials saved for", gateway)
+		printExampleTokenUsage(gateway, token.AccessToken)
+	}
+
+	return nil
+}
+
+func authClientCredentialsJSON() error {
 
 	body := ClientCredentialsReq{
 		ClientID:     clientID,
@@ -196,6 +245,12 @@ func authClientCredentials() error {
 	req, _ := http.NewRequest(http.MethodPost, authURL, buf)
 	req.Header.Set("Content-Type", "application/json")
 	res, err := http.DefaultClient.Do(req)
+
+	fmt.Println("URL:", authURL)
+	// fmt.Println("Retry:", retries)
+	fmt.Println("StatusCode:", res.StatusCode)
+	fmt.Println("body:", string(bodyBytes))
+
 
 	if err != nil {
 		return errors.Wrap(err, fmt.Sprintf("cannot POST to %s", authURL))
