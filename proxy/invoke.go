@@ -51,53 +51,67 @@ func InvokeFunction(gateway string, name string, bytesIn *[]byte, contentType st
 	}
 	gatewayURL += qs
 
-	req, err := http.NewRequest(httpMethod, gatewayURL, reader)
-	if err != nil {
-		fmt.Println()
-		fmt.Println(err)
-		return nil, fmt.Errorf("cannot connect to OpenFaaS on URL: %s", gateway)
-	}
-
-	req.Header.Add("Content-Type", contentType)
-	// Add additional headers to request
-	for name, value := range headerMap {
-		req.Header.Add(name, value)
-	}
-
-	// Removed by AE - the system-level basic auth secrets should not be transmitted
-	// to functions. Functions should implement their own auth.
-	// SetAuth(req, gateway)
-
-	res, err := client.Do(req)
-
-	if err != nil {
-		fmt.Println()
-		fmt.Println(err)
-		return nil, fmt.Errorf("cannot connect to OpenFaaS on URL: %s", gateway)
-	}
-
-	if res.Body != nil {
-		defer res.Body.Close()
-	}
-
-	switch res.StatusCode {
-	case http.StatusAccepted:
-		fmt.Fprintf(os.Stderr, "Function submitted asynchronously.\n")
-	case http.StatusOK:
-		var readErr error
-		resBytes, readErr = ioutil.ReadAll(res.Body)
-		if readErr != nil {
-			return nil, fmt.Errorf("cannot read result from OpenFaaS on URL: %s %s", gateway, readErr)
+	retries := 0
+	done := false
+	nextURL := gatewayURL
+	for !done {
+		if retries > 5 {
+			return nil, fmt.Errorf("too many redirection (%d) to OpenFaaS on URL: %s", retries, gatewayURL)
 		}
-	case http.StatusUnauthorized:
-		return nil, fmt.Errorf("unauthorized access, run \"faas-cli login\" to setup authentication for this server")
-	default:
-		bytesOut, err := ioutil.ReadAll(res.Body)
-		if err == nil {
-			return nil, fmt.Errorf("server returned unexpected status code: %d - %s", res.StatusCode, string(bytesOut))
+		retries += 1
+
+		req, err := http.NewRequest(httpMethod, nextURL, reader)
+		if err != nil {
+			fmt.Println()
+			fmt.Println(err)
+			return nil, fmt.Errorf("cannot connect to OpenFaaS on URL: %s", gateway)
+		}
+
+		req.Header.Add("Content-Type", contentType)
+		// Add additional headers to request
+		for name, value := range headerMap {
+			req.Header.Add(name, value)
+		}
+
+		// Removed by AE - the system-level basic auth secrets should not be transmitted
+		// to functions. Functions should implement their own auth.
+		// SetAuth(req, gateway)
+
+		res, err := client.Do(req)
+
+		if err != nil {
+			fmt.Println()
+			fmt.Println(err)
+			return nil, fmt.Errorf("cannot connect to OpenFaaS on URL: %s", gateway)
+		}
+
+		if res.Body != nil {
+			defer res.Body.Close()
+		}
+
+		switch res.StatusCode {
+		case http.StatusAccepted:
+			done = true
+			fmt.Fprintf(os.Stderr, "Function submitted asynchronously.\n")
+		case http.StatusOK:
+			done = true
+			var readErr error
+			resBytes, readErr = ioutil.ReadAll(res.Body)
+			if readErr != nil {
+				return nil, fmt.Errorf("cannot read result from OpenFaaS on URL: %s %s", gateway, readErr)
+			}
+		case http.StatusUnauthorized:
+			return nil, fmt.Errorf("unauthorized access, run \"faas-cli login\" to setup authentication for this server")
+		case http.StatusTemporaryRedirect, http.StatusPermanentRedirect:
+			nextURL = res.Header.Get("Location")
+		default:
+			done = true
+			bytesOut, err := ioutil.ReadAll(res.Body)
+			if err == nil {
+				return nil, fmt.Errorf("server returned unexpected status code: %d - %s", res.StatusCode, string(bytesOut))
+			}
 		}
 	}
-
 	return &resBytes, nil
 }
 
