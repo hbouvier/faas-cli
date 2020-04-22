@@ -76,6 +76,9 @@ func InvokeFunction(gateway string, name string, bytesIn *[]byte, contentType st
 		// Removed by AE - the system-level basic auth secrets should not be transmitted
 		// to functions. Functions should implement their own auth.
 		// SetAuth(req, gateway)
+		if token := os.Getenv("OPENFAAS_FUNCTION_TOKEN"); token != "" {
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
 
 		res, err := client.Do(req)
 
